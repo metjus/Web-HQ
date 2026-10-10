@@ -1,20 +1,22 @@
 # CloudPulse HQ
 
-Súkromná iPhone PWA pre návštevnosť webov z Cloudflare. Hostovanie: Cloudflare Pages + Pages Functions + Workers KV. **Žiadne PHP ani automatický refresh.**
+Súkromná iPhone PWA na sledovanie Cloudflare Web Analytics stránok (vrátane webov mimo Cloudflare hostingu).
 
-## Nasadenie
+## Použitie
 
-1. Cloudflare → Workers & Pages → Create → Pages → Import Git repository → `metjus/Web-HQ`, branch `main`.
-2. Framework preset: None. Build command: `exit 0`. Output directory: `.`.
-3. V Cloudflare vytvor Workers KV namespace, napr. `cloudpulse-private`.
-4. V nastavení Pages projektu → Bindings → Add → KV namespace: variable **`CLOUDPULSE_KV`**, vyber vytvorený namespace.
-5. V Pages → Settings → Variables and Secrets pridaj šifrované secrets **`ADMIN_PASSWORD`** (dlhé unikátne heslo) a **`SESSION_SECRET`** (náhodný dlhý reťazec, aspoň 32 znakov).
-6. Redeploy projektu po uložení bindings a secrets. Na iPhone otvor HTTPS URL v Safari → Zdieľať → Pridať na plochu.
-7. Cloudflare → Profile → API Tokens → Create Token s minimálne Zone → Analytics → Read a oprávnením iba na požadované zóny. Zone ID nájdeš na detailoch domény.
-8. Po prihlásení pridaj doménu, Zone ID a API token. Klikni na Refresh.
+1. Aplikácia beží na Cloudflare Worker `web-hq` (repo `metjus/Web-HQ`).
+2. V Settings / Variables and Secrets Workera nastav `ADMIN_PASSWORD` a `SESSION_SECRET` ako šifrované Secrets.
+3. Binding `CLOUDPULSE_KV` musí smerovať na Workers KV namespace `cloudpulse-private`. Binding je už v `wrangler.jsonc`, preto by ho deployment nemal zrušiť.
+4. V Cloudflare vytvor **API token s Account → Analytics → Read** (prístup iba k svojmu účtu). Nepoužívaj Global API Key.
+5. V dashboarde CloudPulse cez ⚙ zadaj názov webu, **Account ID**, **Web Analytics Site Tag** a API token. Site Tag patrí stránke Web Analytics, nie Zone ID. Account ID nájdeš v Cloudflare account overview / URL.
+6. Stlač **Refresh**. Aktualizácie sa nespúšťajú automaticky.
 
-## Poznámky k bezpečnosti
+Cloudflare RUM GraphQL node: `viewer.accounts.rumPageloadEventsAdaptiveGroups`. Metrika **visits** nie je počet unikátnych osôb; **count** označuje page-load events. Sedemdňové hodnoty sú súčtom denných údajov.
 
-Repozitár môže byť verejný; tokeny a heslo sa tam nesmú commitovať. Tokeny sú uložené na serveri v Cloudflare Workers KV (šifrovanie úložiska poskytované Cloudflare), nie v browser localStorage. Prístup chráni jedno spoločné heslo a podpisované HttpOnly Secure cookie na 7 dní. Nasadzuj iba cez HTTPS. Odporúčané pre osobnú aplikáciu: Cloudflare Access ako ďalšia ochrana a silné unikátne heslo. Pri vystavení na verejnej adrese odporúčame zapnúť tiež rate limiting na endpoint /api/login; samotná aplikácia ho nezabezpečuje.
+Pre nové statické weby môžeš nezávisle používať Cloudflare Workers Static Assets a napojiť ich na Web Analytics. Existujúce weby zostávajú na svojom hostingu.
 
-Čísla 7 dní sú súčtom denných unique visitor hodnôt, nie jedinečnými ľuďmi za celé obdobie. Dátum je podľa UTC. Chybové odpovede Cloudflare API sa zobrazujú, nevkladajú sa fiktívne dáta.
+## Bezpečnosť
+Repozitár je verejný; žiadne tajomstvá doň neukladaj. Tokeny a zoznam webov sa ukladajú v Workers KV za overením heslom. Odporúčame Cloudflare Access / rate limiting pre `/api/login`. Používaj HTTPS. CloudPulse je osobný prototyp, nie auditované bezpečnostné riešenie.
+
+## Overenie
+Aktuálne zmeny sa automaticky nasadzujú z GitHubu; živé API odpovede treba otestovať s vlastným Cloudflare účtom. Neúspešné GraphQL volania sa zobrazujú ako chyby, nie ako vymyslené štatistiky.
