@@ -3,6 +3,20 @@
   "name": "web-hq",
   "main": "src/worker.js",
   "compatibility_date": "2026-09-01",
-  "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": ["/api/*"] },
-  "observability": { "enabled": true }
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": [
+      "/api/*"
+    ]
+  },
+  "observability": {
+    "enabled": true
+  },
+  "kv_namespaces": [
+    {
+      "binding": "CLOUDPULSE_KV",
+      "id": "6ced164cf9494be1b8c30a5c8ec478c1"
+    }
+  ]
 }
