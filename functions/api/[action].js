@@ -1,7 +1,7 @@
 const json=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{"content-type":"application/json; charset=utf-8","cache-control":"no-store","x-content-type-options":"nosniff"}});
 const enc=new TextEncoder();
 const hex=b=>Array.from(new Uint8Array(b)).map(x=>x.toString(16).padStart(2,"0")).join("");
-async function hmac(secret,input){const key=await crypto.subtle.importKey("raw",enc.encode(secret),"HMAC",false,["sign"]);return hex(await crypto.subtle.sign("HMAC",key,enc.encode(input)));}
+async function hmac(secret,input){const key=await crypto.subtle.importKey("raw",enc.encode(secret),{name:"HMAC",hash:"SHA-256"},false,["sign"]);return hex(await crypto.subtle.sign("HMAC",key,enc.encode(input)));}
 function cookies(req){return Object.fromEntries((req.headers.get("cookie")||"").split(";").map(s=>s.trim().split("=")).filter(a=>a.length===2));}
 async function authorized(req,env){const raw=cookies(req).cp_session;if(!raw||!env.SESSION_SECRET)return false;const [expires,mac]=raw.split(".");if(!/^\d{10,14}$/.test(expires)||Number(expires)<Date.now())return false;return mac===(await hmac(env.SESSION_SECRET,expires));}
 function cookie(value,maxAge){return "cp_session="+value+"; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age="+maxAge;}
