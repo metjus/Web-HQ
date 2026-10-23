@@ -8,6 +8,32 @@ function cookie(value,maxAge){return "cp_session="+value+"; HttpOnly; Secure; Sa
 const validId=x=>/^[a-f0-9]{32}$/i.test(x||"");
 async function getSites(env){return await env.CLOUDPULSE_KV.get("sites","json")||[];}
 function publicSites(list){return list.map(({id,name,zone,accountId,siteTag})=>({id,name,zone,accountId,siteTag}));}
+function siteInput(input,existing){
+const name=String(input.name||"").trim().slice(0,80),accountId=String(input.accountId||"").trim().toLowerCase(),siteTag=String(input.siteTag||"").trim().toLowerCase();
+const token=String(input.token||"").trim()||existing?.token;
+if(!name)throw Error("Chýba názov / doména.");
+if(!validId(accountId))throw Error("Account ID musí mať 32 znakov (0-9, a-f).");
+if(!validId(siteTag))throw Error("Site Tag musí mať 32 znakov. Použi siteTag z URL štatistík, nie token z JS snippetu.");
+if(!token||token.length>512||/\s/.test(token))throw Error("Vlož samotný API token bez medzier alebo príkazu.");
+return {name,accountId,siteTag,token};
+}
+async function verifySite(site){
+const checkedAt=new Date().toISOString();
+let stats;
+try{stats=await getData(site);}catch(e){return {state:"error",checkedAt,message:"Analytiku sa nepodarilo načítať: "+String(e.message).slice(0,200)};}
+let info=null;
+try{
+const response=await fetch(`https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(site.accountId)}/rum/site_info/${encodeURIComponent(site.siteTag)}`,{headers:{authorization:"Bearer "+site.token},signal:AbortSignal.timeout(15000)});
+const body=await response.json();
+if(response.ok&&body.success&&body.result?.site_tag?.toLowerCase()===site.siteTag.toLowerCase())info=body.result;
+}catch{}
+const hasData=stats.week.views>0||stats.week.visitors>0;
+if(info){
+const hosts=[...new Set([info.ruleset?.zone_name,...(info.rules||[]).filter(r=>r.inclusive&&!r.is_paused).map(r=>r.host)].filter(Boolean))];
+return {state:hasData?"verified":"empty",checkedAt,hosts,message:hasData?"Site Tag aj prístup k analytike sú overené.":"Site Tag je overený. Za posledných 7 dní po vylúčení botov nie sú zaznamenané návštevy. Skontroluj merací skript, ak návštevy očakávaš."};
+}
+return {state:hasData?"data":"unverified",checkedAt,message:hasData?"Analytika vracia dáta pre tento Site Tag. Priradenie k doméne nebolo overené.":"API odpovedá, ale nevracia dáta. Nulová návštevnosť nepotvrdzuje správny Site Tag. Skontroluj siteTag v URL Cloudflare. Na overenie existencie webu môže token potrebovať Account Settings: Read."};
+}
 async function getData(site, asOf=new Date()){
 if(!site.accountId)throw Error("Starý záznam Zone Analytics: pridaj web cez Account ID a Web Analytics Site Tag pre porovnateľné štatistiky.");
 const end=asOf.toISOString(), start24=new Date(asOf.getTime()-86400000).toISOString(), start7=new Date(asOf.getTime()-7*86400000).toISOString();
@@ -16,7 +42,7 @@ last24h:rumPageloadEventsAdaptiveGroups(limit:1,filter:{siteTag:$site,datetime_g
 week:rumPageloadEventsAdaptiveGroups(limit:1,filter:{siteTag:$site,datetime_geq:$start7,datetime_lt:$end,bot:0}){count sum{visits}}
 series:rumPageloadEventsAdaptiveGroups(limit:8,orderBy:[date_ASC],filter:{siteTag:$site,datetime_geq:$start7,datetime_lt:$end,bot:0}){dimensions{date}count sum{visits}}
 }}}`;
-const response=await fetch("https://api.cloudflare.com/client/v4/graphql",{method:"POST",headers:{"authorization":"Bearer "+site.token,"content-type":"application/json"},body:JSON.stringify({query,variables:{account:site.accountId,site:site.siteTag,start24,start7,end}})});
+const response=await fetch("https://api.cloudflare.com/client/v4/graphql",{method:"POST",headers:{"authorization":"Bearer "+site.token,"content-type":"application/json"},signal:AbortSignal.timeout(20000),body:JSON.stringify({query,variables:{account:site.accountId,site:site.siteTag,start24,start7,end}})});
 const raw=await response.json();
 if(!response.ok||raw.errors?.length)throw Error(raw.errors?.[0]?.message||"Cloudflare API error "+response.status);
 const account=raw.data?.viewer?.accounts?.[0];
@@ -37,8 +63,26 @@ try{
 if(action==="login"&&method==="POST"){const input=await request.json();if(typeof input.password!=="string"||input.password!==env.ADMIN_PASSWORD)return json({error:"Nesprávne heslo."},401);const expiry=String(Date.now()+7*86400000);const signature=await hmac(env.SESSION_SECRET,expiry);const res=json({ok:true});res.headers.set("set-cookie",cookie(expiry+"."+signature,604800));return res;}
 if(action==="logout"&&method==="POST"){const res=json({ok:true});res.headers.set("set-cookie",cookie("",0));return res;}
 if(!await authorized(request,env))return json({error:"Neprihlásený prístup."},401);
+if(env.PREVIEW_READ_ONLY==="true"&&action==="sites"&&method!=="GET")return json({error:"Toto je náhľad iba na čítanie. Weby upravuj v produkčnej aplikácii."},403);
 if(action==="sites"&&method==="GET")return json({sites:publicSites(await getSites(env))});
-if(action==="sites"&&method==="POST"){const input=await request.json();const name=String(input.name||"").trim().slice(0,80),accountId=String(input.accountId||"").trim(),siteTag=String(input.siteTag||"").trim(),token=String(input.token||"").trim();if(!name)return json({error:"Chýba názov / doména."},400);if(!validId(accountId))return json({error:"Account ID musí mať 32 znakov (0-9, a-f). Zadané: "+accountId.length+" znakov."},400);if(!validId(siteTag))return json({error:"Web Analytics Site Tag musí mať 32 znakov (0-9, a-f). Zadané: "+siteTag.length+" znakov. Nevkladaj celý JS snippet."},400);if(!token||token.length>512||token.includes("Bearer ")||token.includes("curl "))return json({error:"Do API Token vlož iba samotný token, nie curl príkaz ani Bearer."},400);const sites=await getSites(env);if(sites.length>=40)return json({error:"Maximum 40 webov."},400);if(sites.some(s=>s.accountId===accountId&&s.siteTag===siteTag))return json({error:"Táto stránka už existuje."},409);const next=[...sites,{id:crypto.randomUUID(),name,accountId,siteTag,token}];await env.CLOUDPULSE_KV.put("sites",JSON.stringify(next));return json({sites:publicSites(next)});}
+if(action==="sites"&&(method==="POST"||method==="PATCH")){
+const input=await request.json(),sites=await getSites(env),editing=method==="PATCH";
+const existing=editing?sites.find(s=>s.id===input.id):null;
+if(editing&&!existing)return json({error:"Web už neexistuje. Obnov zoznam."},404);
+let candidate;try{candidate=siteInput(input,existing);}catch(e){return json({error:e.message},400);}
+if(!editing&&sites.length>=40)return json({error:"Maximum 40 webov."},400);
+if(sites.some(s=>s.id!==existing?.id&&s.accountId?.toLowerCase()===candidate.accountId&&s.siteTag?.toLowerCase()===candidate.siteTag))return json({error:"Táto stránka už existuje."},409);
+const saved={...existing,...candidate,id:existing?.id||crypto.randomUUID()};
+const next=editing?sites.map(s=>s.id===saved.id?saved:s):[...sites,saved];
+await env.CLOUDPULSE_KV.put("sites",JSON.stringify(next));return json({sites:publicSites(next)});
+}
+if(action==="verify"&&method==="POST"){
+const input=await request.json(),sites=await getSites(env);
+const existing=input.id?sites.find(s=>s.id===input.id):null;
+if(input.id&&!existing)return json({error:"Web už neexistuje."},404);
+let candidate;try{candidate=input.saved===true&&existing?existing:siteInput(input,existing);}catch(e){return json({error:e.message},400);}
+return json(await verifySite(candidate));
+}
 if(action==="sites"&&method==="DELETE"){const input=await request.json();const sites=await getSites(env);await env.CLOUDPULSE_KV.put("sites",JSON.stringify(sites.filter(s=>s.id!==input.id)));return json({ok:true});}
 if(action==="stats"&&method==="GET"){const sites=await getSites(env),asOf=new Date();const results=await Promise.all(sites.map(async s=>{try{return {id:s.id,name:s.name,...await getData(s,asOf)};}catch(e){return {id:s.id,name:s.name,error:String(e.message||e).slice(0,250)};}}));return json({sites:results,updated:asOf.toISOString()});}
 return json({error:"Neznáma požiadavka."},404);

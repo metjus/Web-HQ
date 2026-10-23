@@ -18,5 +18,16 @@
       "binding": "CLOUDPULSE_KV",
       "id": "6ced164cf9494be1b8c30a5c8ec478c1"
     }
-  ]
+  ],
+  "previews": {
+    "vars": {
+      "PREVIEW_READ_ONLY": "true"
+    },
+    "kv_namespaces": [
+      {
+        "binding": "CLOUDPULSE_KV",
+        "id": "6ced164cf9494be1b8c30a5c8ec478c1"
+      }
+    ]
+  }
 }
