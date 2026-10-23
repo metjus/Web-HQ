@@ -8,22 +8,27 @@ function cookie(value,maxAge){return "cp_session="+value+"; HttpOnly; Secure; Sa
 const validId=x=>/^[a-f0-9]{32}$/i.test(x||"");
 async function getSites(env){return await env.CLOUDPULSE_KV.get("sites","json")||[];}
 function publicSites(list){return list.map(({id,name,zone,accountId,siteTag})=>({id,name,zone,accountId,siteTag}));}
-async function getData(site){
-const today=new Date(), end=new Date(Date.UTC(today.getUTCFullYear(),today.getUTCMonth(),today.getUTCDate()+1)).toISOString(),start=new Date(Date.UTC(today.getUTCFullYear(),today.getUTCMonth(),today.getUTCDate()-6)).toISOString();
-const rum=!!site.accountId;
-const query=rum
-?`query($account:String!,$site:String!,$start:Time!,$end:Time!){viewer{accounts(filter:{accountTag:$account}){rumPageloadEventsAdaptiveGroups(limit:10,orderBy:[date_ASC],filter:{siteTag:$site,datetime_geq:$start,datetime_lt:$end}){dimensions{date}count sum{visits}}}}}`
-:`query($zone:String!,$start:Date!,$end:Date!){viewer{zones(filter:{zoneTag:$zone}){httpRequests1dGroups(limit:9,orderBy:[date_ASC],filter:{date_geq:$start,date_leq:$end}){dimensions{date}sum{pageViews}uniq{uniques}}}}}`;
-const variables=rum?{account:site.accountId,site:site.siteTag,start,end}:{zone:site.zone,start:start.slice(0,10),end:today.toISOString().slice(0,10)};
-const response=await fetch("https://api.cloudflare.com/client/v4/graphql",{method:"POST",headers:{"authorization":"Bearer "+site.token,"content-type":"application/json"},body:JSON.stringify({query,variables})});
+async function getData(site, asOf=new Date()){
+if(!site.accountId)throw Error("Starý záznam Zone Analytics: pridaj web cez Account ID a Web Analytics Site Tag pre porovnateľné štatistiky.");
+const end=asOf.toISOString(), start24=new Date(asOf.getTime()-86400000).toISOString(), start7=new Date(asOf.getTime()-7*86400000).toISOString();
+const query=`query($account:String!,$site:String!,$start24:Time!,$start7:Time!,$end:Time!){viewer{accounts(filter:{accountTag:$account}){
+last24h:rumPageloadEventsAdaptiveGroups(limit:1,filter:{siteTag:$site,datetime_geq:$start24,datetime_lt:$end,bot:0}){count sum{visits}}
+week:rumPageloadEventsAdaptiveGroups(limit:1,filter:{siteTag:$site,datetime_geq:$start7,datetime_lt:$end,bot:0}){count sum{visits}}
+series:rumPageloadEventsAdaptiveGroups(limit:8,orderBy:[date_ASC],filter:{siteTag:$site,datetime_geq:$start7,datetime_lt:$end,bot:0}){dimensions{date}count sum{visits}}
+}}}`;
+const response=await fetch("https://api.cloudflare.com/client/v4/graphql",{method:"POST",headers:{"authorization":"Bearer "+site.token,"content-type":"application/json"},body:JSON.stringify({query,variables:{account:site.accountId,site:site.siteTag,start24,start7,end}})});
 const raw=await response.json();
 if(!response.ok||raw.errors?.length)throw Error(raw.errors?.[0]?.message||"Cloudflare API error "+response.status);
-const scope=rum?raw.data?.viewer?.accounts:raw.data?.viewer?.zones;
-if(!scope?.length)throw Error("Token nemá prístup k analytike. Skontroluj Account ID / Site Tag a Account Analytics: Read.");
-const rows=(rum?scope[0].rumPageloadEventsAdaptiveGroups:scope[0].httpRequests1dGroups)||[];
+const account=raw.data?.viewer?.accounts?.[0];
+if(!account)throw Error("Token nemá prístup k analytike. Skontroluj Account ID a Account Analytics: Read.");
+for(const key of ["last24h","week","series"])if(!Array.isArray(account[key]))throw Error("Cloudflare vrátil neúplnú odpoveď analytiky.");
+const metrics=row=>({visitors:row?.sum?.visits??0,views:row?.count??0});
 const days=[];
-for(let i=6;i>=0;i--){const date=new Date(Date.UTC(today.getUTCFullYear(),today.getUTCMonth(),today.getUTCDate()-i)).toISOString().slice(0,10);const entry=rows.find(x=>x.dimensions?.date===date);days.push({date,visitors:rum?(entry?.sum?.visits||0):(entry?.uniq?.uniques||0),views:rum?(entry?.count||0):(entry?.sum?.pageViews||0)});}
-return {metric:rum?"visits":"unique",days,today:days.at(-1),week:{visitors:days.reduce((n,d)=>n+d.visitors,0),views:days.reduce((n,d)=>n+d.views,0)}};
+for(let time=Date.parse(start7.slice(0,10)+"T00:00:00Z");time<asOf.getTime();time+=86400000){
+const date=new Date(time).toISOString().slice(0,10);
+days.push({date,...metrics(account.series.find(row=>row.dimensions?.date===date))});
+}
+return {metric:"visits",excludeBots:true,period:{start24,start7,end},last24h:metrics(account.last24h[0]),week:metrics(account.week[0]),days};
 }
 export async function onRequest({request,env,params}){
 if(!env.ADMIN_PASSWORD||!env.SESSION_SECRET||!env.CLOUDPULSE_KV)return json({error:"Chýba konfigurácia ADMIN_PASSWORD, SESSION_SECRET alebo CLOUDPULSE_KV."},503);
@@ -35,7 +40,7 @@ if(!await authorized(request,env))return json({error:"Neprihlásený prístup."}
 if(action==="sites"&&method==="GET")return json({sites:publicSites(await getSites(env))});
 if(action==="sites"&&method==="POST"){const input=await request.json();const name=String(input.name||"").trim().slice(0,80),accountId=String(input.accountId||"").trim(),siteTag=String(input.siteTag||"").trim(),token=String(input.token||"").trim();if(!name)return json({error:"Chýba názov / doména."},400);if(!validId(accountId))return json({error:"Account ID musí mať 32 znakov (0-9, a-f). Zadané: "+accountId.length+" znakov."},400);if(!validId(siteTag))return json({error:"Web Analytics Site Tag musí mať 32 znakov (0-9, a-f). Zadané: "+siteTag.length+" znakov. Nevkladaj celý JS snippet."},400);if(!token||token.length>512||token.includes("Bearer ")||token.includes("curl "))return json({error:"Do API Token vlož iba samotný token, nie curl príkaz ani Bearer."},400);const sites=await getSites(env);if(sites.length>=40)return json({error:"Maximum 40 webov."},400);if(sites.some(s=>s.accountId===accountId&&s.siteTag===siteTag))return json({error:"Táto stránka už existuje."},409);const next=[...sites,{id:crypto.randomUUID(),name,accountId,siteTag,token}];await env.CLOUDPULSE_KV.put("sites",JSON.stringify(next));return json({sites:publicSites(next)});}
 if(action==="sites"&&method==="DELETE"){const input=await request.json();const sites=await getSites(env);await env.CLOUDPULSE_KV.put("sites",JSON.stringify(sites.filter(s=>s.id!==input.id)));return json({ok:true});}
-if(action==="stats"&&method==="GET"){const sites=await getSites(env);const results=await Promise.all(sites.map(async s=>{try{return {id:s.id,name:s.name,...await getData(s)};}catch(e){return {id:s.id,name:s.name,error:String(e.message||e).slice(0,250)};}}));return json({sites:results,updated:new Date().toISOString()});}
+if(action==="stats"&&method==="GET"){const sites=await getSites(env),asOf=new Date();const results=await Promise.all(sites.map(async s=>{try{return {id:s.id,name:s.name,...await getData(s,asOf)};}catch(e){return {id:s.id,name:s.name,error:String(e.message||e).slice(0,250)};}}));return json({sites:results,updated:asOf.toISOString()});}
 return json({error:"Neznáma požiadavka."},404);
 }catch(e){return json({error:"Požiadavka zlyhala: "+String(e.message||e).slice(0,180)},500);}
 }
