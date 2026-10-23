@@ -63,6 +63,7 @@ try{
 if(action==="login"&&method==="POST"){const input=await request.json();if(typeof input.password!=="string"||input.password!==env.ADMIN_PASSWORD)return json({error:"Nesprávne heslo."},401);const expiry=String(Date.now()+7*86400000);const signature=await hmac(env.SESSION_SECRET,expiry);const res=json({ok:true});res.headers.set("set-cookie",cookie(expiry+"."+signature,604800));return res;}
 if(action==="logout"&&method==="POST"){const res=json({ok:true});res.headers.set("set-cookie",cookie("",0));return res;}
 if(!await authorized(request,env))return json({error:"Neprihlásený prístup."},401);
+if(env.PREVIEW_READ_ONLY==="true"&&action==="sites"&&method!=="GET")return json({error:"Toto je náhľad iba na čítanie. Weby upravuj v produkčnej aplikácii."},403);
 if(action==="sites"&&method==="GET")return json({sites:publicSites(await getSites(env))});
 if(action==="sites"&&(method==="POST"||method==="PATCH")){
 const input=await request.json(),sites=await getSites(env),editing=method==="PATCH";

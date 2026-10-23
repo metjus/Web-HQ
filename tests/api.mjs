@@ -22,3 +22,10 @@ async function verify(){const r=await call('verify','POST',{id:'one',saved:true}
 assert.equal((await verify()).state,'unverified');info=true;assert.equal((await verify()).state,'empty');count=5;assert.equal((await verify()).state,'verified');info=false;assert.equal((await verify()).state,'data');fail=true;assert.equal((await verify()).state,'error');assert.equal(writes,before);
 assert.equal((await call('sites')).status,200);
 console.log('API tests passed: authorization, edits, token preservation/secrecy, validation, duplicates and all verification states.');
+
+env.PREVIEW_READ_ONLY="true";
+const writesBeforePreview=writes;
+for(const method of ["POST","PATCH","DELETE"])assert.equal((await call("sites",method,{id:"one"})).status,403);
+assert.equal((await call("sites")).status,200);
+assert.equal(writes,writesBeforePreview);
+console.log("Preview blocks all site mutations and permits authenticated reads.");

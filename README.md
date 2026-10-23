@@ -47,3 +47,7 @@ Overiť prepojenie kontroluje analytiku aj metadata Site Tagu. REST metadata vy�
 Regresné testy API (Node 22+): `node tests/api.mjs`. Používajú simulované Cloudflare odpovede a KV, nie živé prihlasovacie údaje. Existujúci KV model je zachovaný; súbežné úpravy nastavení z viacerých zariadení nie sú transakčné.
 
 Testy ovládania oboch HTML vstupov: s dostupným balíkom `jsdom` spusti `node tests/ui.cjs`. Testujú DOM, nie vykreslenie v Safari. Koreňový index je zjednotený s public/index.html, aby oba vstupy používali Account ID / Site Tag.
+
+## Cloudflare branch previews
+
+`wrangler preview` potrebuje blok `previews`. Náhľad používa rovnaký KV namespace, ale `PREVIEW_READ_ONLY=true` na serveri zakazuje POST/PATCH/DELETE pre weby, aby náhľad nemenil produkčné nastavenia. Produkčné nastavenie túto premennú nemá. Pre prihlásenie do náhľadu nastav ADMIN_PASSWORD a SESSION_SECRET v Cloudflare Previews Base; produkčné secrets sa automaticky neprenášajú. Bez nich API bezpečne vráti 503. Hodnoty secrets nepatria do Gitu.
